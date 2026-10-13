@@ -24,7 +24,7 @@ jobs:
       - name: Test payload discovery and metadata parser on Linux
         run: |
           g++ -std=c++20 -Wall -Wextra -Werror \
-            -Ihomebrew/payload-launcher/native \
+            -Inative \
             tests/test_payloads.cpp \
             native/payloads.cpp \
             -o /tmp/test-payloads
