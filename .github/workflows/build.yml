@@ -1,0 +1,161 @@
+name: Build PS5 Payload LauncherX
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**'
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  ps5:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18 ninja-build make wget curl unzip tar git \
+            python3 python3-pil pkg-config ca-certificates g++
+      - name: Test payload discovery and metadata parser on Linux
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror \
+            -Ihomebrew/payload-launcher/native \
+            tests/test_payloads.cpp \
+            native/payloads.cpp \
+            -o /tmp/test-payloads
+          /tmp/test-payloads
+      - name: Fetch proven native UI scaffold
+        run: |
+          git clone --depth=1 https://github.com/Yahballon/PS5-DevBridge.git /tmp/devbridge
+          test -f /tmp/devbridge/templates/simple-calc/GNUmakefile
+          cp -a /tmp/devbridge/templates/simple-calc ./app
+      - name: Copy native sources and generate original artwork
+        run: |
+          cp native/main.cpp \
+             native/payloads.cpp \
+             native/payloads.hpp \
+             native/settings.cpp \
+             native/settings.hpp app/src/
+          # Pin decoder to a fixed upstream commit. No runtime network dependency.
+          curl --fail --location --silent --show-error \
+             https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20/stb_image.h \
+             -o app/src/stb_image.h
+          test -s app/src/stb_image.h
+          python3 native/generate_assets.py
+          python3 - <<'PY'
+          import json,pathlib
+          cfg=json.loads(pathlib.Path('app.json').read_text())
+          p=pathlib.Path('app/sce_sys/param.json')
+          params=json.loads(p.read_text())
+          params['titleId']=cfg['titleId']
+          params['conceptId']=cfg['titleId'][-5:]
+          params['contentId']=cfg['contentId']
+          params['contentVersion']=cfg['contentVersion']
+          params['localizedParameters']['en-US']['titleName']=cfg['name']
+          p.write_text(json.dumps(params,indent=2)+'\n')
+          PY
+      - name: Prepare pinned PS5 OpenGL SDK
+        working-directory: app
+        env:
+          USE_CCACHE: '0'
+          BUILD_JOBS: '4'
+          PS5_CLANG: clang-18
+        run: bash tools/prepare-opengl.sh
+      - name: Generate SDK POSIX compatibility archive
+        run: |
+          mkdir -p app/build/jb-json
+          cp app/.deps/native/ps5-payload-sdk/target/lib/libc.a app/build/jb-json/libjb-posix.a
+          llvm-objcopy-18 \
+            --redefine-sym=openlog=jb_sdk_openlog \
+            --redefine-sym=closelog=jb_sdk_closelog \
+            --redefine-sym=mkstemp=jb_sdk_mkstemp \
+            --redefine-sym=mkstemps=jb_sdk_mkstemps \
+            --redefine-sym=getpwuid_r=jb_sdk_getpwuid_r \
+            app/build/jb-json/libjb-posix.a
+      - name: Compile bundled PS5 USB helper
+        run: |
+          make -C homebrew/payload-launcher/helper \
+            PS5_PAYLOAD_SDK="$GITHUB_WORKSPACE/app/.deps/native/ps5-payload-sdk"
+          test -s helper/usbscan.elf
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('helper/usbscan.elf')
+          assert p.read_bytes()[:6]==b'\x7fELF\x02\x01', 'USB helper must be ELF64'
+          print('Bundled read-only helper verified')
+          PY
+          cp helper/usbscan.elf app/usbscan.elf
+      - name: Build and package native PS5 app
+        working-directory: app
+        env:
+          USE_CCACHE: '0'
+          BUILD_JOBS: '4'
+          PS5_CLANG: clang-18
+        run: make USE_CCACHE=0 BUILD_JOBS=4 APP_ROOT_FILES=usbscan.elf app
+      - name: Validate PS5 ZIP, assets and executable
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, struct, zipfile
+          title='PPSA99873'
+          root=pathlib.Path('app/dist')/title
+          meta=json.loads((root/'sce_sys/param.json').read_text())
+          assert meta['titleId']==title
+          assert meta['contentVersion']=='01.000.006'
+          assert meta['contentId']=='UP9000-PPSA99873_00-PAYLOADLAUNCHER0'
+          binary=(root/'eboot.bin').read_bytes()
+          assert len(binary)>4096
+          assert struct.unpack('<I',binary[:4])[0]==0x1d3d154f, 'not an expected PS5 FSELF header'
+          assert 'v0.2.4' in pathlib.Path('native/main.cpp').read_text(), 'missing native version in source'
+          required=['usbscan.elf','eboot.bin','sce_module/libc.prx','sce_sys/icon0.png',
+                    'sce_sys/param.json','assets/launcher-background.png',
+                    'assets/fonts/inter-semibold.huifont']
+          for f in required:assert (root/f).is_file(),f
+          z=zipfile.ZipFile(f'app/dist/{title}.zip')
+          assert z.testzip() is None
+          for f in required:assert f'{title}/{f}' in z.namelist(),f
+          print('PS5 FSELF, version, resources and ZIP verified')
+          PY
+      - name: Upload installable ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Payload-Launcher-v0.2.4-PPSA99873
+          path: app/dist/PPSA99873.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish versioned GitHub Release (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag='payload-launcher-v0.2.4'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release already exists. Not overwriting existing version."
+            exit 0
+          fi
+          cat > /tmp/release-notes.md <<'NOTES'
+          # Payload LauncherX v0.2.4 by YAHBALLON
+
+          Native PS5 USB payload browser with a blue neon console interface.
+
+          ## Features
+          - Discover `/mnt/usb0/payloads/<folder>/` dynamically.
+          - Display each payload's `payload.json` name, description, version, and author.
+          - Load each payload's local `payload.png` icon (with a fallback icon).
+          - Launch an ELF payload by submitting its local file path to an already running elfldr daemon on `127.0.0.1:9021`.
+          - Scroll through large lists and navigate with DualSense controls.
+          - Independent persistent settings for USB refresh and alphabetic sorting.
+
+          ## Installation
+          Extract `PPSA99873.zip` into `/data/homebrew/`, then register or refresh in ShadowMountPlus (or another compatible loader). An appropriate jailbreak/runtime and a compatible localhost ELF loader are required for payload launching. Firmware/hardware execution has not been independently verified.
+
+          ## Known limitations
+          The app submits the launch request; whether the payload ran successfully requires separate verification. USB paths depend on the console runtime, and unsupported or invalid PNG files use a fallback icon. Run only payloads you trust.
+          NOTES
+          gh release create "$tag" "app/dist/PPSA99873.zip" \
+             --target "$GITHUB_SHA" --title 'Payload LauncherX v0.2.4' \
+             --notes-file /tmp/release-notes.md
