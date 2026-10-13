@@ -79,7 +79,7 @@ jobs:
             app/build/jb-json/libjb-posix.a
       - name: Compile bundled PS5 USB helper
         run: |
-          make -C homebrew/payload-launcher/helper \
+          make -C helper \
             PS5_PAYLOAD_SDK="$GITHUB_WORKSPACE/app/.deps/native/ps5-payload-sdk"
           test -s helper/usbscan.elf
           python3 - <<'PY'
