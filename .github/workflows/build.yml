@@ -48,12 +48,21 @@ jobs:
           test -s app/src/stb_image.h
           python3 native/generate_assets.py
           mkdir -p app/sce_sys
-          cp sce_sys/icon0.png app/sce_sys/icon0.png
           python3 - <<'PY'
           from PIL import Image
-          p=Image.open('app/sce_sys/icon0.png')
-          assert p.format=='PNG' and p.size==(128,128), 'Unexpected launcher icon format'
-          print('Original USB LauncherX icon verified')
+          from pathlib import Path
+          source=Path('sce_sys/icon0.png')
+          destination=Path('app/sce_sys/icon0.png')
+          with Image.open(source) as original:
+              assert original.format=='PNG', 'Launcher artwork must be PNG'
+              logo=original.convert('RGB')
+          if logo.size!=(512,512):
+              logo=logo.resize((512,512),Image.Resampling.LANCZOS)
+          logo.save(destination,format='PNG',optimize=True)
+          with Image.open(destination) as result:
+              assert result.format=='PNG' and result.size==(512,512), 'PS5 icon must be 512x512 PNG'
+              result.verify()
+          print('Original USB LauncherX icon prepared for PS5 (512x512)')
           PY
           python3 - <<'PY'
           import json,pathlib
@@ -122,6 +131,10 @@ jobs:
                     'sce_sys/param.json','assets/launcher-background.png',
                     'assets/fonts/inter-semibold.huifont']
           for f in required:assert (root/f).is_file(),f
+          from PIL import Image
+          with Image.open(root/'sce_sys/icon0.png') as icon:
+            assert icon.format=='PNG' and icon.size==(512,512), 'Packaged PS5 icon must be 512x512 PNG'
+            icon.verify()
           z=zipfile.ZipFile(f'app/dist/{title}.zip')
           assert z.testzip() is None
           for f in required:assert f'{title}/{f}' in z.namelist(),f
