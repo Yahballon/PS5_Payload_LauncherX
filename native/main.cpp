@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// (AI-assisted) Native PS5 USB Payload LauncherX by YAHBALLON, v0.2.5.
+// (AI-assisted) Native PS5 USB Payload LauncherX by YAHBALLON, v0.2.6.
 #include "gfx/renderer.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/pad.hpp"
 #include "platform/ps5/system.hpp"
 #include "payloads.hpp"
+#include "processes.hpp"
 #include "settings.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
@@ -28,7 +29,7 @@ using hui::gfx::DrawList;
 using hui::gfx::Align;
 namespace {
 constexpr auto kTitle="PPSA99873";
-constexpr auto kVersion="v0.2.5";
+constexpr auto kVersion="v0.2.6";
 const Color kWhite=Color::rgb(0xf1f6ff);
 const Color kMuted=Color::rgb(0xa1bbdc);
 const Color kBlue=Color::rgb(0x119bff);
@@ -52,6 +53,39 @@ void start(const launcher::Payload& payload){
         delete j;g_launching.store(false);
         std::lock_guard<std::mutex> hold(g_lock);g_message="Unable to start loader worker";
     } else pthread_detach(id);
+}
+
+struct ProcJob{bool kill=false;launcher::RunningProcess proc;};
+std::mutex g_procLock;
+std::atomic<bool> g_procBusy{false};
+bool g_procReady=false;
+launcher::ProcessSnapshot g_procData;
+std::string g_procNotice;
+void* proc_worker(void* arg){
+    ProcJob* job=(ProcJob*)arg;
+    std::string notice;
+    if(job->kill)launcher::kill_running_process(job->proc,notice);
+    auto result=launcher::fetch_running_processes();
+    {
+        std::lock_guard<std::mutex> lock(g_procLock);
+        g_procData=std::move(result);
+        g_procNotice=std::move(notice);
+        g_procReady=true;
+    }
+    delete job;
+    g_procBusy.store(false);
+    return nullptr;
+}
+bool check_procs(const launcher::RunningProcess* kill=nullptr){
+    if(g_procBusy.exchange(true))return false;
+    auto* job=new ProcJob;
+    if(kill){job->kill=true;job->proc=*kill;}
+    pthread_t thread{};
+    if(pthread_create(&thread,nullptr,proc_worker,job)!=0){
+        delete job;g_procBusy.store(false);return false;
+    }
+    pthread_detach(thread);
+    return true;
 }
 std::string read_file(const std::string& path,std::size_t limit=16*1024*1024){
     FILE* f=fopen(path.c_str(),"rb");if(!f)return {};
@@ -137,6 +171,10 @@ struct App {
     std::uint32_t appLogo=0;
     int selected=0,scroll=0,frame=0;
     bool inSettings=false,inDetails=false;
+    bool showProcs=false,killConfirm=false,procAvailable=false;
+    std::vector<launcher::RunningProcess> procs;
+    std::string procStatus="R2: check running ELF payloads";
+    int procSelected=0,procScroll=0,procFrame=0;
     int settingsRow=0;
     std::string status;
     void refresh(hui::gfx::Renderer& r){
@@ -151,6 +189,13 @@ struct App {
         for(int i=0;i<(int)data.payloads.size();i++)if(data.payloads[i].folder==key)selected=i;
         scroll=std::min(scroll,std::max(0,(int)data.payloads.size()-9));
         frame=0;
+    }
+    void navigate_proc(int change){
+        int n=(int)procs.size();
+        if(n<=0)return;
+        procSelected=std::max(0,std::min(n-1,procSelected+change));
+        if(procSelected<procScroll)procScroll=procSelected;
+        if(procSelected>procScroll+8)procScroll=procSelected-8;
     }
     void navigate(int change){
         int n=(int)data.payloads.size();
@@ -169,15 +214,56 @@ void draw_screen(DrawList& ui,App& app,const hui::gfx::Font& font,unsigned atlas
     else logo(ui,87,25,1.0f);
     label(ui,font,atlas,"Payload",222,78,43,kWhite);
     label(ui,font,atlas,"LauncherX",397,78,43,Color::rgb(0x159efe));
-    label(ui,font,atlas,"PS5 HOMEBREW PAYLOADS",224,113,18,Color::rgb(0x80bdff),Align::left,5.3f);
+    label(ui,font,atlas,app.showProcs?"RUNNING ELF PAYLOADS":"PS5 HOMEBREW PAYLOADS",224,113,18,Color::rgb(0x80bdff),Align::left,5.3f);
     label(ui,font,atlas,"by YAHBALLON",223,141,15,Color::rgb(0x709aca),Align::left,2.1f);
-    hint(ui,font,atlas,1078,"X","Launch");
-    hint(ui,font,atlas,1231,"square","Details");
+    hint(ui,font,atlas,1078,"X",app.showProcs?"Kill":"Launch");
+    if(app.showProcs)label(ui,font,atlas,"L2 USB  /  R2 RUNNING",1230,111,18,kMuted);
+    else hint(ui,font,atlas,1231,"square","Details");
     hint(ui,font,atlas,1403,"triangle","Refresh");
     label(ui,font,atlas,"≡",1578,110,35,Color::rgb(0x96c4ff),Align::center);
     label(ui,font,atlas,"Options",1608,111,19);
     label(ui,font,atlas,kVersion,1860,109,19,Color::rgb(0xb5d2f6),Align::right);
-    if(app.data.payloads.empty()){
+    if(app.showProcs){
+        if(!app.procAvailable){
+            ui.bordered_rect({270,310,1380,480},26,Color::rgb(0x020d1c,0.84f),2,kBorder);
+            label(ui,font,atlas,"PROCESS MONITOR UNAVAILABLE",960,458,41,kWhite,Align::center);
+            label(ui,font,atlas,"Run ps5-payload-manager (localhost:8084).",960,529,27,kMuted,Align::center);
+            label(ui,font,atlas,"Press TRIANGLE to retry, or L2 to return to USB.",960,587,24,Color::rgb(0x70bfff),Align::center);
+        }else if(app.procs.empty()){
+            ui.bordered_rect({270,310,1380,480},26,Color::rgb(0x020d1c,0.84f),2,kBorder);
+            label(ui,font,atlas,"NO RUNNING ELF DAEMONS",960,458,41,kWhite,Align::center);
+            label(ui,font,atlas,"Injected threads do not appear as separate processes.",960,535,26,kMuted,Align::center);
+        }else{
+            ui.push_clip({65,156,1780,864});
+            for(int row=app.procScroll;row<(int)app.procs.size()&&row<app.procScroll+10;row++){
+                const auto& p=app.procs[row];
+                float y=161+(row-app.procScroll)*98.0f;
+                bool chosen=row==app.procSelected;
+                ui.bordered_rect({82,y+2,1749,88},17,chosen?Color::rgb(0x04316a,0.82f):kPanel,
+                    chosen?3.f:1.35f,chosen?kBlue:kBorder);
+                if(chosen)ui.glow({82,y+2,1749,88},16,20,Color::rgb(0x008cff,0.21f));
+                placeholder(ui,108,y+10);
+                label(ui,font,atlas,p.name,227,y+48,27,kWhite);
+                label(ui,font,atlas,"PID "+std::to_string(p.pid),227,y+80,20,kMuted);
+                char mem[64];std::snprintf(mem,sizeof(mem),"%.1f MiB RAM",p.memoryMiB);
+                label(ui,font,atlas,mem,1010,y+54,23,Color::rgb(0x9bc6ff));
+                bool canKill=launcher::process_is_stoppable(p);
+                ui.bordered_rect({1544,y+22,185,44},11,
+                    canKill?Color::rgb(0x4a1027,0.77f):Color::rgb(0x14253a),
+                    1.5f,canKill?Color::rgb(0xef6284):kBorder);
+                label(ui,font,atlas,canKill?"X  KILL":"PROTECTED",1635,y+51,20,
+                    canKill?Color::rgb(0xffb5c6):kMuted,Align::center);
+            }
+            ui.pop_clip();
+            if(app.procs.size()>9){
+                ui.rounded_rect({1864,171,5,820},2,Color::rgb(0x1c3761));
+                float total=(float)app.procs.size();
+                float h=std::max(35.f,820*9.f/total);
+                float yy=171+(820-h)*((float)app.procScroll/std::max(1.f,total-9));
+                ui.rounded_rect({1863,yy,7,h},3,kBlue);
+            }
+        }
+    }else if(app.data.payloads.empty()){
         ui.bordered_rect({270,310,1380,480},26,Color::rgb(0x020d1c,0.84f),2,Color::rgb(0x1267b3));
         ui.glow({600,388,720,180},60,60,Color::rgb(0x0079fa,0.11f));
         label(ui,font,atlas,"NO USB PAYLOADS FOUND",960,448,43,kWhite,Align::center);
@@ -221,15 +307,30 @@ void draw_screen(DrawList& ui,App& app,const hui::gfx::Font& font,unsigned atlas
         }
     }
     ui.gradient_rect({0,1014,1920,66},0,Color::rgb(0x031225,0.0f),Color::rgb(0x031225,0.94f));
-    label(ui,font,atlas,app.status,95,1060,18,Color::rgb(0x88b5ed));
-    if(!app.data.payloads.empty())label(ui,font,atlas,std::to_string(app.selected+1)+" / "+std::to_string(app.data.payloads.size()),1840,1060,18,kMuted,Align::right);
+    label(ui,font,atlas,app.showProcs?app.procStatus:app.status,95,1060,18,Color::rgb(0x88b5ed));
+    if(app.showProcs&&!app.procs.empty())label(ui,font,atlas,
+        std::to_string(app.procSelected+1)+" / "+std::to_string(app.procs.size()),1840,1060,18,kMuted,Align::right);
+    else if(!app.showProcs&&!app.data.payloads.empty())label(ui,font,atlas,
+        std::to_string(app.selected+1)+" / "+std::to_string(app.data.payloads.size()),1840,1060,18,kMuted,Align::right);
 }
 void draw_overlay(DrawList& ui,App& app,const hui::gfx::Font& font,unsigned atlas){
-    if(!app.inDetails&&!app.inSettings)return;
+    if(!app.inDetails&&!app.inSettings&&!app.killConfirm)return;
     ui.rounded_rect({0,0,1920,1080},0,Color::rgb(0x000712,0.75f));
     ui.shadow({450,226,1020,625},31,60,Color::rgb(0x007cff,0.33f));
     ui.bordered_rect({450,225,1020,626},26,Color::rgb(0x071931),2.5f,Color::rgb(0x168aff));
-    if(app.inSettings){
+    if(app.killConfirm){
+        if(app.procSelected>=0&&app.procSelected<(int)app.procs.size()){
+            const auto& p=app.procs[app.procSelected];
+            label(ui,font,atlas,"STOP RUNNING PAYLOAD?",504,315,38);
+            label(ui,font,atlas,p.name,504,395,32,kWhite);
+            label(ui,font,atlas,"PID "+std::to_string(p.pid),504,443,24,kMuted);
+            label(ui,font,atlas,"Force stopping may cause crashes or data loss.",504,524,24,Color::rgb(0xffabbc));
+            label(ui,font,atlas,"Only standalone ELF processes can be stopped.",504,563,22,kMuted);
+            ui.bordered_rect({510,685,416,73},14,Color::rgb(0x631930),2,Color::rgb(0xff6587));
+            label(ui,font,atlas,"X  CONFIRM KILL",718,733,26,kWhite,Align::center);
+            label(ui,font,atlas,"CIRCLE  CANCEL",1194,732,23,kMuted,Align::center);
+        }
+    }else if(app.inSettings){
         label(ui,font,atlas,"LAUNCHER SETTINGS",504,304,40);
         label(ui,font,atlas,"Runtime configuration",505,345,22,kMuted);
         const char* settingNames[]={"Automatic USB refresh", "Alphabetical sorting"};
@@ -294,11 +395,26 @@ int main(){
         if(stick!=0){if(++stickRepeat==1||(stickRepeat>20&&(stickRepeat-20)%7==0))movement|=stick<0?hui::pad_bits::kUp:hui::pad_bits::kDown;}
         else stickRepeat=0;
         if(pressed&hui::pad_bits::kCircle){
-            if(app.inSettings)app.inSettings=false;
+            if(app.killConfirm)app.killConfirm=false;
+            else if(app.inSettings)app.inSettings=false;
             else if(app.inDetails)app.inDetails=false;
+            else if(app.showProcs)app.showProcs=false;
             else {pad.close();for(auto& i:app.icons)if(i.texture){GLuint v=i.texture;glDeleteTextures(1,&v);}renderer.release();display.close();hui::sys::quit();}
-        } else if(pressed&hui::pad_bits::kOptions){app.inSettings=!app.inSettings;app.inDetails=false;}
-        else if(app.inSettings){
+        }else if(app.killConfirm){
+            if(pressed&hui::pad_bits::kCross){
+                if(app.procSelected>=0&&app.procSelected<(int)app.procs.size()&&
+                   launcher::process_is_stoppable(app.procs[app.procSelected])){
+                    if(check_procs(&app.procs[app.procSelected]))app.procStatus="Sending kill request...";
+                }
+                app.killConfirm=false;
+            }
+        }else if(pressed&hui::pad_bits::kOptions){app.inSettings=!app.inSettings;app.inDetails=false;}
+        else if((pressed&hui::pad_bits::kR2)&&!app.inSettings){
+            app.showProcs=true;app.inDetails=false;app.procFrame=0;
+            if(check_procs())app.procStatus="Checking active ELF processes...";
+        }else if((pressed&hui::pad_bits::kL2)&&!app.inSettings){
+            app.showProcs=false;app.inDetails=false;
+        }else if(app.inSettings){
             if(movement&hui::pad_bits::kUp)app.settingsRow=std::max(0,app.settingsRow-1);
             if(movement&hui::pad_bits::kDown)app.settingsRow=std::min(1,app.settingsRow+1);
             if(pressed&hui::pad_bits::kCross){
@@ -307,7 +423,21 @@ int main(){
                 app.status=app.settings.save()?"Settings saved":"Warning: Could not save settings";
                 if(app.settingsRow==1)app.refresh(renderer);
             }
-        } else {
+        }else if(app.showProcs){
+            if(movement&hui::pad_bits::kUp)app.navigate_proc(-1);
+            if(movement&hui::pad_bits::kDown)app.navigate_proc(1);
+            if(pressed&hui::pad_bits::kL1)app.navigate_proc(-9);
+            if(pressed&hui::pad_bits::kR1)app.navigate_proc(9);
+            if(pressed&hui::pad_bits::kTriangle){
+                if(check_procs())app.procStatus="Refreshing running processes...";
+            }
+            if((pressed&hui::pad_bits::kCross)&&app.procSelected>=0&&
+               app.procSelected<(int)app.procs.size()){
+                if(launcher::process_is_stoppable(app.procs[app.procSelected]))
+                    app.killConfirm=true;
+                else app.procStatus="Protected process: cannot kill";
+            }
+        }else{
             if(movement&hui::pad_bits::kUp)app.navigate(-1);
             if(movement&hui::pad_bits::kDown)app.navigate(1);
             if(pressed&hui::pad_bits::kL1)app.navigate(-9);
@@ -318,7 +448,25 @@ int main(){
                 start(app.data.payloads[app.selected]);app.inDetails=false;
             }
         }
-        if(app.settings.autoRefresh&&!app.inSettings&&!app.inDetails&&++app.frame>=60*15 && !g_launching.load())app.refresh(renderer);
+        if(app.settings.autoRefresh&&!app.inSettings&&!app.inDetails&&!app.showProcs&&
+           ++app.frame>=60*15&&!g_launching.load())app.refresh(renderer);
+        if(app.showProcs&&!app.inSettings&&!app.killConfirm&&++app.procFrame>=60*15){
+            app.procFrame=0;check_procs();
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_procLock);
+            if(g_procReady){
+                int previousPid=app.procSelected<(int)app.procs.size()?app.procs[app.procSelected].pid:-1;
+                app.procAvailable=g_procData.available;
+                app.procs=std::move(g_procData.processes);
+                app.procStatus=g_procNotice.empty()?g_procData.message:g_procNotice+" | "+g_procData.message;
+                app.procSelected=0;
+                for(int i=0;i<(int)app.procs.size();i++)
+                    if(app.procs[i].pid==previousPid)app.procSelected=i;
+                app.procScroll=std::max(0,std::min(app.procScroll,std::max(0,(int)app.procs.size()-9)));
+                g_procNotice.clear();g_procReady=false;
+            }
+        }
         {std::lock_guard<std::mutex> hold(g_lock);if(!g_message.empty()){app.status=g_message;g_message.clear();}}
         DrawList ui;draw_screen(ui,app,font,atlas);draw_overlay(ui,app,font,atlas);
         renderer.begin();renderer.draw(ui);renderer.present(0,display.width(),display.height());display.swap();

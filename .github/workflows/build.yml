@@ -29,6 +29,11 @@ jobs:
             native/payloads.cpp \
             -o /tmp/test-payloads
           /tmp/test-payloads
+      - name: Test running process parser and kill protections
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror -Inative \
+            tests/test_processes.cpp native/processes.cpp -o /tmp/test-processes
+          /tmp/test-processes
       - name: Fetch proven native UI scaffold
         run: |
           git clone --depth=1 https://github.com/Yahballon/PS5-DevBridge.git /tmp/devbridge
@@ -39,6 +44,8 @@ jobs:
           cp native/main.cpp \
              native/payloads.cpp \
              native/payloads.hpp \
+             native/processes.cpp \
+             native/processes.hpp \
              native/settings.cpp \
              native/settings.hpp app/src/
           # Pin decoder to a fixed upstream commit. No runtime network dependency.
@@ -121,12 +128,14 @@ jobs:
           root=pathlib.Path('app/dist')/title
           meta=json.loads((root/'sce_sys/param.json').read_text())
           assert meta['titleId']==title
-          assert meta['contentVersion']=='01.000.007'
+          assert meta['contentVersion']=='01.000.008'
           assert meta['contentId']=='UP9000-PPSA99873_00-PAYLOADLAUNCHER0'
           binary=(root/'eboot.bin').read_bytes()
           assert len(binary)>4096
           assert struct.unpack('<I',binary[:4])[0]==0x1d3d154f, 'not an expected PS5 FSELF header'
-          assert 'v0.2.5' in pathlib.Path('native/main.cpp').read_text(), 'missing native version in source'
+          assert 'v0.2.6' in pathlib.Path('native/main.cpp').read_text(), 'missing native version in source'
+          assert (root/'eboot.bin').stat().st_size > 4096
+
           required=['usbscan.elf','eboot.bin','sce_module/libc.prx','sce_sys/icon0.png',
                     'sce_sys/param.json','assets/launcher-background.png',
                     'assets/fonts/inter-semibold.huifont']
@@ -143,7 +152,7 @@ jobs:
       - name: Upload installable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Payload-Launcher-v0.2.5-PPSA99873
+          name: Payload-Launcher-v0.2.6-PPSA99873
           path: app/dist/PPSA99873.zip
           if-no-files-found: error
           retention-days: 30
@@ -153,13 +162,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag='payload-launcher-v0.2.5'
+          tag='payload-launcher-v0.2.6'
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release already exists. Not overwriting existing version."
             exit 0
           fi
           cat > /tmp/release-notes.md <<'NOTES'
-          # Payload LauncherX v0.2.5 by YAHBALLON
+          # Payload LauncherX v0.2.6 by YAHBALLON
 
           Native PS5 USB payload browser with a blue neon console interface.
 
@@ -168,6 +177,9 @@ jobs:
           - Display each payload's `payload.json` name, description, version, and author.
           - Load each payload's local `payload.png` icon (with a fallback icon).
           - Launch an ELF payload by submitting its local file path to an already running elfldr daemon on `127.0.0.1:9021`.
+          - Monitor real running ELF daemons using the optional localhost ps5-payload-manager API (port 8084).
+          - R2 opens Running Payloads; L2 returns to USB. Refresh with Triangle.
+          - Kill selected non-critical ELF daemon only after explicit confirmation; elfldr and pldmgr are protected.
           - Scroll through large lists and navigate with DualSense controls.
           - Independent persistent settings for USB refresh and alphabetic sorting.
 
@@ -178,5 +190,5 @@ jobs:
           The app submits the launch request; whether the payload ran successfully requires separate verification. USB paths depend on the console runtime, and unsupported or invalid PNG files use a fallback icon. Run only payloads you trust.
           NOTES
           gh release create "$tag" "app/dist/PPSA99873.zip" \
-             --target "$GITHUB_SHA" --title 'Payload LauncherX v0.2.5' \
+             --target "$GITHUB_SHA" --title 'Payload LauncherX v0.2.6' \
              --notes-file /tmp/release-notes.md
