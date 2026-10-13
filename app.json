@@ -1,0 +1,11 @@
+{
+  "name": "Payload LauncherX",
+  "slug": "payload-launcher",
+  "titleId": "PPSA99873",
+  "contentId": "UP9000-PPSA99873_00-PAYLOADLAUNCHER0",
+  "version": "0.2.4",
+  "contentVersion": "01.000.006",
+  "usbRoot": "/mnt/usb0/payloads",
+  "loader": "ps5-payload-elfldr localhost:9021",
+  "developer": "YAHBALLON"
+}
