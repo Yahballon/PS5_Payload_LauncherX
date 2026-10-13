@@ -47,6 +47,14 @@ jobs:
              -o app/src/stb_image.h
           test -s app/src/stb_image.h
           python3 native/generate_assets.py
+          mkdir -p app/sce_sys
+          cp sce_sys/icon0.png app/sce_sys/icon0.png
+          python3 - <<'PY'
+          from PIL import Image
+          p=Image.open('app/sce_sys/icon0.png')
+          assert p.format=='PNG' and p.size==(128,128), 'Unexpected launcher icon format'
+          print('Original USB LauncherX icon verified')
+          PY
           python3 - <<'PY'
           import json,pathlib
           cfg=json.loads(pathlib.Path('app.json').read_text())
@@ -104,12 +112,12 @@ jobs:
           root=pathlib.Path('app/dist')/title
           meta=json.loads((root/'sce_sys/param.json').read_text())
           assert meta['titleId']==title
-          assert meta['contentVersion']=='01.000.006'
+          assert meta['contentVersion']=='01.000.007'
           assert meta['contentId']=='UP9000-PPSA99873_00-PAYLOADLAUNCHER0'
           binary=(root/'eboot.bin').read_bytes()
           assert len(binary)>4096
           assert struct.unpack('<I',binary[:4])[0]==0x1d3d154f, 'not an expected PS5 FSELF header'
-          assert 'v0.2.4' in pathlib.Path('native/main.cpp').read_text(), 'missing native version in source'
+          assert 'v0.2.5' in pathlib.Path('native/main.cpp').read_text(), 'missing native version in source'
           required=['usbscan.elf','eboot.bin','sce_module/libc.prx','sce_sys/icon0.png',
                     'sce_sys/param.json','assets/launcher-background.png',
                     'assets/fonts/inter-semibold.huifont']
@@ -122,7 +130,7 @@ jobs:
       - name: Upload installable ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Payload-Launcher-v0.2.4-PPSA99873
+          name: Payload-Launcher-v0.2.5-PPSA99873
           path: app/dist/PPSA99873.zip
           if-no-files-found: error
           retention-days: 30
@@ -132,13 +140,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag='payload-launcher-v0.2.4'
+          tag='payload-launcher-v0.2.5'
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release already exists. Not overwriting existing version."
             exit 0
           fi
           cat > /tmp/release-notes.md <<'NOTES'
-          # Payload LauncherX v0.2.4 by YAHBALLON
+          # Payload LauncherX v0.2.5 by YAHBALLON
 
           Native PS5 USB payload browser with a blue neon console interface.
 
@@ -157,5 +165,5 @@ jobs:
           The app submits the launch request; whether the payload ran successfully requires separate verification. USB paths depend on the console runtime, and unsupported or invalid PNG files use a fallback icon. Run only payloads you trust.
           NOTES
           gh release create "$tag" "app/dist/PPSA99873.zip" \
-             --target "$GITHUB_SHA" --title 'Payload LauncherX v0.2.4' \
+             --target "$GITHUB_SHA" --title 'Payload LauncherX v0.2.5' \
              --notes-file /tmp/release-notes.md

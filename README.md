@@ -1,10 +1,14 @@
 # Payload LauncherX by YAHBALLON
 
-**Native PS5 USB payload launcher** · **v0.2.4** · **Title ID `PPSA99873`**
+**Native PS5 USB payload launcher** · **v0.2.5** · **Title ID `PPSA99873`**
 
 A controller-driven PS5 homebrew browser based on [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui), inspired by the supplied blue neon launcher reference. The list is entirely dynamic; no sample payloads or hardcoded fake metadata are bundled.
 
+![Payload LauncherX USB icon](sce_sys/icon0.png)
+
 ## Features
+
+- Original USB stick branding included as `sce_sys/icon0.png`, reused in the app header and installable ZIP.
 
 - Discovers payloads from one USB folder per executable in `/mnt/usb0/payloads/`.
 - Tries direct native mount access and `/usb0/payloads`, then streams the bundled, read-only `usbscan.elf` to an already running elfldr on `127.0.0.1:9021`. No websrv is needed. Firmware 5.10 behavior has not been hardware tested.
@@ -56,13 +60,13 @@ Example `payload.json`:
 
 Source: `native/`.
 Workflow: [`.github/workflows/build.yml`](../../.github/workflows/build.yml).
-Release tag: `payload-launcher-v0.2.4`.
+Release tag: `payload-launcher-v0.2.5`.
 
-The workflow copies the known-working PS5-DevBridge C++/OpenGL scaffold, supplies the app source files, downloads the pinned `stb_image.h` header for **offline PNG decoding**, generates the original launcher artwork, compiles natively and validates the release ZIP. Pull requests build only a test artifact; successful pushes to `main` can publish the versioned release. No existing app folders are modified.
+The workflow copies the known-working PS5-DevBridge C++/OpenGL scaffold, supplies the app source files, downloads the pinned `stb_image.h` header for **offline PNG decoding**, generates the original launcher background and copies the checked-in USB icon to `sce_sys/icon0.png`, compiles natively and validates the release ZIP. Pull requests build only a test artifact; successful pushes to `main` can publish the versioned release. No existing app folders are modified.
 
 ## Installation
 
-1. Download `PPSA99873.zip` from a verified successful [release](https://github.com/Yahballon/PS5_Payload_LauncherX/releases/tag/payload-launcher-v0.2.4).
+1. Download `PPSA99873.zip` from a verified successful [release](https://github.com/Yahballon/PS5_Payload_LauncherX/releases/tag/payload-launcher-v0.2.5).
 2. Extract its `PPSA99873/` folder to `/data/homebrew/PPSA99873/` on the PS5.
 3. Register or refresh the homebrew app with ShadowMountPlus or another compatible launcher.
 4. Start a compatible PS5 ELF loader such as [ps5-payload-elfldr](https://github.com/ps5-payload-dev/elfldr) on loopback port 9021 to enable launching.
@@ -89,3 +93,7 @@ On launch, display elfldr's response in the status bar. A silent response is rep
 ## v0.2.4
 
 The bundled USB scanner serves the selected ELF to the app via a restricted localhost connection. The app transfers the ELF bytes to the existing elfldr at port 9021. Firmware 5.10 hardware verification is pending.
+
+## v0.2.5 branding update
+
+Replaced the generated PX console icon with the new blue neon USB artwork. The same checked-in `sce_sys/icon0.png` is now packaged with the app and displayed in the header. No payload launch behavior changes.

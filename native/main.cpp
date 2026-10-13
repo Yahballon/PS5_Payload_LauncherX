@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// (AI-assisted) Native PS5 USB Payload LauncherX by YAHBALLON, v0.2.4.
+// (AI-assisted) Native PS5 USB Payload LauncherX by YAHBALLON, v0.2.5.
 #include "gfx/renderer.hpp"
 #include "platform/ps5/display_egl.hpp"
 #include "platform/ps5/pad.hpp"
@@ -28,7 +28,7 @@ using hui::gfx::DrawList;
 using hui::gfx::Align;
 namespace {
 constexpr auto kTitle="PPSA99873";
-constexpr auto kVersion="v0.2.4";
+constexpr auto kVersion="v0.2.5";
 const Color kWhite=Color::rgb(0xf1f6ff);
 const Color kMuted=Color::rgb(0xa1bbdc);
 const Color kBlue=Color::rgb(0x119bff);
@@ -134,6 +134,7 @@ struct App {
     launcher::ScanResult data;
     std::vector<Icon> icons;
     std::uint32_t background=0;
+    std::uint32_t appLogo=0;
     int selected=0,scroll=0,frame=0;
     bool inSettings=false,inDetails=false;
     int settingsRow=0;
@@ -164,7 +165,8 @@ void draw_screen(DrawList& ui,App& app,const hui::gfx::Font& font,unsigned atlas
     ui.gradient_rect({0,0,1920,1080},0,Color::rgb(0x020918),Color::rgb(0x03122b));
     if(app.background)ui.image(app.background,{0,0,1920,1080},kFullUv,Color::rgb(0xffffff));
     ui.gradient_rect({0,0,1920,155},0,Color::rgb(0x020815,0.25f),Color::rgb(0x011128,0.58f));
-    logo(ui,87,25,1.0f);
+    if(app.appLogo)ui.image(app.appLogo,{87,22,92,92},kFullUv,Color::rgb(0xffffff),11);
+    else logo(ui,87,25,1.0f);
     label(ui,font,atlas,"Payload",222,78,43,kWhite);
     label(ui,font,atlas,"LauncherX",397,78,43,Color::rgb(0x159efe));
     label(ui,font,atlas,"PS5 HOMEBREW PAYLOADS",224,113,18,Color::rgb(0x80bdff),Align::left,5.3f);
@@ -269,6 +271,8 @@ int main(){
     App app;app.settings.load();
     app.background=load_png(renderer,"/app0/assets/launcher-background.png",2048);
     if(!app.background)app.background=load_png(renderer,std::string("/data/homebrew/")+kTitle+"/assets/launcher-background.png",2048);
+    app.appLogo=load_png(renderer,"/app0/sce_sys/icon0.png",512);
+    if(!app.appLogo)app.appLogo=load_png(renderer,std::string("/data/homebrew/")+kTitle+"/sce_sys/icon0.png",512);
     app.refresh(renderer);
     unsigned held=0;int repeat=0,stickRepeat=0;
     for(;;){

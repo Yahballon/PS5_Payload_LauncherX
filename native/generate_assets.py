@@ -39,15 +39,3 @@ for j in range(310):
 bg=Image.alpha_composite(bg,stars).convert('RGB')
 bg.save(out/'launcher-background.png',optimize=True)
 
-im=Image.new('RGBA',(512,512),(2,11,27,255))
-ld=ImageDraw.Draw(im)
-for i in range(24):
-    z=20+i*3
-    ld.rounded_rectangle((z,z,512-z,512-z),radius=max(6,105-i*2),outline=(0,max(30,148-i*4),255,max(40,190-i*5)),width=2)
-ld.rounded_rectangle((53,53,459,459),radius=88,fill=(1,30,70,255),outline=(16,153,255,255),width=12)
-ld.polygon([(132,162),(235,112),(235,341),(132,391)],fill=(18,143,242))
-ld.polygon([(251,117),(378,189),(378,309),(251,388),(251,325),(313,290),(313,213),(251,178)],fill=(237,247,255))
-ld.polygon([(181,220),(223,197),(223,262),(181,286)],fill=(1,29,66))
-ld.line([(108,401),(225,466),(377,387)],fill=(15,143,253),width=7)
-Path('app/sce_sys').mkdir(parents=True,exist_ok=True)
-im.convert('RGB').save('app/sce_sys/icon0.png',optimize=True)
